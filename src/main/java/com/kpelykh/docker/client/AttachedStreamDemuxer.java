@@ -114,7 +114,7 @@ class AttachedStreamDemuxer<O extends OutputStream, E extends OutputStream> impl
                 in.readFully(buf, 0, size);
                 logger.trace("received frame: {}", new String(buf));
                 if (null != dest) {
-                    dest.write(buf);
+                    dest.write(buf, 0, size);
                 }
             } catch (IOException e) {
                 logger.error("unexpected I/O error in frame", e);
