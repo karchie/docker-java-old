@@ -31,6 +31,11 @@ import javax.ws.rs.core.MultivaluedMap;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.MalformedURLException;
+import java.net.SocketAddress;
+import java.net.URL;
 import java.util.List;
 import java.util.UUID;
 
@@ -41,15 +46,20 @@ import java.util.UUID;
  */
 public class DockerClient
 {
-
+    public static final String DOCKER_API_VERSION = "v1.8";
     private static final Logger LOGGER = LoggerFactory.getLogger(DockerClient.class);
 
-    private static DockerClient instance;
-    private Client client;
-    private String restEndpointUrl;
+    private final Client client;
+    private final String restEndpointUrl;
+    private final URL serverURL;
 
-    public DockerClient(String serverUrl) {
-        restEndpointUrl = serverUrl + "/v1.8";
+    public DockerClient(String serverUrl) throws DockerException {
+        try {
+            this.serverURL = new URL(serverUrl);
+        } catch (MalformedURLException e) {
+            throw new DockerException("invalid Docker server address", e);
+        }
+        restEndpointUrl = serverUrl + "/" + DOCKER_API_VERSION;
         ClientConfig clientConfig = new DefaultClientConfig();
         clientConfig.getFeatures().put(JSONConfiguration.FEATURE_POJO_MAPPING, Boolean.TRUE);
 
@@ -524,7 +534,26 @@ public class DockerClient
         }
     }
 
-    public ClientResponse copyFile(String containerId, String resource) throws DockerException {
+    public AttachedContainer attachContainer(final String containerId,
+            final byte[] stdin, final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream)
+                    throws DockerException {
+        int port = serverURL.getPort();
+        if (-1 == port) {
+            port = 4243;
+        }
+        final SocketAddress addr = new InetSocketAddress(serverURL.getHost(), port);
+        final AttachedContainer container;
+        try {
+            container = new SocketAttachedContainer(addr, serverURL.getPath(), containerId, stdin, stdout, stderr, logs, stream);
+        } catch (IOException e) {
+            throw new DockerException("unable to attach to container", e);
+        }
+        container.run();
+        return container;
+    }
+    
+   public ClientResponse copyFile(String containerId, String resource) throws DockerException {
         CopyConfig copyConfig = new CopyConfig();
         copyConfig.setResource(resource);
 
@@ -551,7 +580,6 @@ public class DockerClient
     }
 
     public List<ChangeLog> containterDiff(String containerId) throws DockerException, NotFoundException {
-
         WebResource webResource = client.resource(restEndpointUrl + String.format("/containers/%s/changes", containerId));
 
         try {
@@ -763,5 +791,4 @@ public class DockerClient
         }
 
     }
-
 }
