@@ -1,7 +1,8 @@
 package com.kpelykh.docker.client.model;
 
-import org.codehaus.jackson.annotate.JsonProperty;
-import org.codehaus.jackson.map.annotate.JsonSerialize;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 import java.util.List;
 
@@ -11,6 +12,7 @@ import java.util.List;
  *
  */
 @JsonSerialize(include = JsonSerialize.Inclusion.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Info {
 
     @JsonProperty("Debug")
@@ -200,7 +202,7 @@ public class Info {
     public void setExecutionDriver(String executionDriver) {
         this.executionDriver=executionDriver;
     }
-
+    
     @Override
     public String toString() {
         return "Info{" +
