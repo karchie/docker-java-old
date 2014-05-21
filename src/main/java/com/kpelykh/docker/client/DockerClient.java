@@ -53,6 +53,10 @@ import com.kpelykh.docker.client.model.SearchItem;
 import com.kpelykh.docker.client.model.Version;
 import com.kpelykh.docker.client.utils.CompressArchiveUtil;
 import com.kpelykh.docker.client.utils.JsonClientFilter;
+import com.kpelykh.io.ByteArraySender;
+import com.kpelykh.io.IOFunction;
+import com.kpelykh.io.InputStreamSender;
+import com.kpelykh.io.NullSender;
 import com.sun.jersey.api.client.Client;
 import com.sun.jersey.api.client.ClientResponse;
 import com.sun.jersey.api.client.GenericType;
@@ -666,24 +670,92 @@ public class DockerClient
 		}
 	}
 
-	public AttachedContainer attachContainer(final String containerId,
-			final byte[] stdin, final OutputStream stdout, final OutputStream stderr,
-			final boolean logs, final boolean stream)
-					throws DockerException {
-		int port = serverURL.getPort();
-		if (-1 == port) {
-			port = 4243;
-		}
-		final SocketAddress addr = new InetSocketAddress(serverURL.getHost(), port);
-		final AttachedContainer container;
-		try {
-			container = new SocketAttachedContainer(addr, serverURL.getPath(), containerId, stdin, stdout, stderr, logs, stream);
-		} catch (IOException e) {
-			throw new DockerException("unable to attach to container", e);
-		}
-		container.run();
-		return container;
-	}
+    private static SocketAddress getSocketAddress(final URL url) {
+        int port = url.getPort();
+        if (-1 == port) {
+            port = 4243;
+        }
+        return new InetSocketAddress(url.getHost(), port);
+    }
+
+    /**
+     * Attach to the named container, pushing the provided stdin and retrieving stdout and/or stderr.
+     * Calling client should invoke waitFor() on the returned AttachedContainer.
+     * @param containerId container ID
+     * @param stdinWriter IOFunction that writes stdin content to the provided OutputStream
+     * @param stdout OutputStream to which stdout will be copied; if null, stdout will be discarded
+     * @param stderr OutputStream to which stderr will be copied; if null, stderr will be discarded
+     * @param logs
+     * @param stream
+     * @return
+     * @throws DockerException
+     */
+    public AttachedContainer attachContainer(final String containerId,
+            final IOFunction<OutputStream,?> stdinWriter, final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream)
+                    throws DockerException {
+        try {
+            return new SocketAttachedContainer(getSocketAddress(serverURL), serverURL.getPath(), containerId, stdinWriter, stdout, stderr, logs, stream);
+        } catch (IOException e) {
+            throw new DockerException("unable to attach to container", e);
+        }
+    }
+
+    /**
+     * Attach to the named container, pushing the provided stdin and retrieving stdout and/or stderr.
+     * Calling client should invoke waitFor() on the returned AttachedContainer.
+     * @param containerId container ID
+     * @param stdin byte array to copy to stdin
+     * @param stdout OutputStream to which stdout will be copied; if null, stdout will be discarded
+     * @param stderr OutputStream to which stderr will be copied; if null, stderr will be discarded
+     * @param logs
+     * @param stream
+     * @return
+     * @throws DockerException
+     */
+    public AttachedContainer attachContainer(final String containerId,
+            final byte[] stdin, final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream)
+                    throws DockerException {
+        return attachContainer(containerId, new ByteArraySender(stdin), stdout, stderr, logs, stream);
+    }
+
+    /**
+     * Attach to the named container, pushing the provided stdin and retrieving stdout and/or stderr.
+     * Calling client should invoke waitFor() on the returned AttachedContainer.
+     * @param containerId container ID
+     * @param stdin InputStream to copy to stdin
+     * @param stdout OutputStream to which stdout will be copied; if null, stdout will be discarded
+     * @param stderr OutputStream to which stderr will be copied; if null, stderr will be discarded
+     * @param logs
+     * @param stream
+     * @return
+     * @throws DockerException
+     */
+    public AttachedContainer attachContainer(final String containerId,
+            final InputStream stdin, final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream)
+                    throws DockerException {
+        return attachContainer(containerId, new InputStreamSender(stdin), stdout, stderr, logs, stream);
+    }
+    
+    /**
+     * Attach to the named container to retrieve stdout and/or stderr.
+     * Calling client should invoke waitFor() on the returned AttachedContainer.
+     * @param containerId container ID
+     * @param stdout OutputStream to which stdout will be copied; if null, stdout will be discarded
+     * @param stderr OutputStream to which stderr will be copied; if null, stderr will be discarded
+     * @param logs
+     * @param stream
+     * @return
+     * @throws DockerException
+     */
+    public AttachedContainer attachContainer(final String containerId,
+            final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream)
+                    throws DockerException {
+        return attachContainer(containerId, NullSender.getInstance(), stdout, stderr, logs, stream);
+    }
 
 	public ClientResponse copyFile(String containerId, String resource) throws DockerException {
 		CopyConfig copyConfig = new CopyConfig();

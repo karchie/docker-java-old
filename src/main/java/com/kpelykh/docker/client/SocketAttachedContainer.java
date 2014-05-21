@@ -1,21 +1,21 @@
 /**
-  * Licensed to the Apache Software Foundation (ASF) under one
-  * or more contributor license agreements.  See the NOTICE file
-  * distributed with this work for additional information
-  * regarding copyright ownership.  The ASF licenses this file
-  * to you under the Apache License, Version 2.0 (the
-  * "License"); you may not use this file except in compliance
-  * with the License.  You may obtain a copy of the License at
-  *
-  *   http://www.apache.org/licenses/LICENSE-2.0
-  *
-  * Unless required by applicable law or agreed to in writing,
-  * software distributed under the License is distributed on an
-  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  * KIND, either express or implied.  See the License for the
-  * specific language governing permissions and limitations
-  * under the License.
-  */
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 package com.kpelykh.docker.client;
 
 import java.io.ByteArrayOutputStream;
@@ -23,11 +23,15 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.net.URL;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.kpelykh.io.IOFunction;
 
 
 /**
@@ -38,25 +42,16 @@ final class SocketAttachedContainer implements AttachedContainer {
     private static final String CRLF = "\r\n";
     private final Logger logger = LoggerFactory.getLogger(SocketAttachedContainer.class);
     private final Socket socket;
-    private final InputStream in;
-    private final OutputStream out;
-    private final byte[] entity;
-    private final OutputStream stdout, stderr;
+    private final AttachedStreamDemuxer<?,?> demuxer;
 
     public SocketAttachedContainer(final Socket socket, final String path,
-            final String containerId, final byte[] stdin,
+            final String containerId, final IOFunction<OutputStream,?> sendBody,
             final OutputStream stdout, final OutputStream stderr,
-            final boolean logs, final boolean stream) throws IOException {
+            final boolean logs, final boolean stream) throws DockerException,IOException {
         this.socket = socket;
         if (!socket.isConnected()) {
             throw new IllegalStateException("socket must be connected");
         }
-        entity = stdin;
-        in = socket.getInputStream();
-        out = socket.getOutputStream();
-
-        this.stdout = stdout;
-        this.stderr = stderr;
 
         final StringBuilder req = new StringBuilder("POST /");
         req.append(DockerClient.DOCKER_API_VERSION);
@@ -76,26 +71,57 @@ final class SocketAttachedContainer implements AttachedContainer {
         req.append(containerId).append("/attach?");
         req.append("logs=").append(logs);
         req.append("&stream=").append(stream);
-        req.append("&stdin=").append(null != entity);
+        req.append("&stdin=").append(null != sendBody);
         req.append("&stdout=").append(null != stdout);
         req.append("&stderr=").append(null != stderr);
         req.append(" HTTP/1.1").append(CRLF).append(CRLF);
+        
+        final OutputStream out = socket.getOutputStream();
         out.write(req.toString().getBytes());
         out.flush();
         logger.trace("sent request header: {}", req);
 
-        consumeHTTPHeader(in);
+        final InputStream in = socket.getInputStream();
+        consumeHTTPHeader(in, logger);
+        
+        try {
+            demuxer = AttachedStreamDemuxer.create(in, stdout, stderr);
+            if (null != sendBody) {
+                sendBody.apply(out);
+                out.flush();
+            }
+            socket.shutdownOutput();
+            logger.trace("sent request and FIN");
+        } catch (IOException e) {
+            throw new DockerException("error writing attach body", e);
+        }
     }
-
+    
     public SocketAttachedContainer(final SocketAddress addr, final String path,
-            final String containerId, final byte[] stdin,
+            final String containerId, final IOFunction<OutputStream,?> sendBody,
             final OutputStream stdout, final OutputStream stderr,
-            final boolean logs, final boolean stream) throws IOException {
-        this(socketFromAddress(addr), path, containerId, stdin, stdout, stderr, logs, stream);
+            final boolean logs, final boolean stream) throws DockerException,IOException {
+        this(makeSocket(addr), path, containerId, sendBody, stdout, stderr, logs, stream);
+    }
+    
+    public SocketAttachedContainer(final URL url, final String containerId,
+            final IOFunction<OutputStream,?> sendBody,
+            final OutputStream stdout, final OutputStream stderr,
+            final boolean logs, final boolean stream) throws DockerException,IOException {
+        this(getSocketAddress(url), url.getPath(), containerId, sendBody, stdout, stderr, logs, stream);
     }
 
     
-    private static Socket socketFromAddress(final SocketAddress addr) throws IOException {
+    private static SocketAddress getSocketAddress(final URL url) {
+        int port = url.getPort();
+        if (-1 == port) {
+            port = 4243;
+        }
+        return new InetSocketAddress(url.getHost(), port);
+    }
+
+
+    private static Socket makeSocket(final SocketAddress addr) throws IOException {
         final Socket socket = new Socket();
         socket.connect(addr);
         return socket;
@@ -106,7 +132,7 @@ final class SocketAttachedContainer implements AttachedContainer {
      * @return header as byte array
      * @throws IOException
      */
-    private byte[] consumeHTTPHeader(final InputStream in) throws IOException {
+    private static byte[] consumeHTTPHeader(final InputStream in, final Logger logger) throws IOException {
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         logger.debug("starting header consumer");
         try {
@@ -141,41 +167,19 @@ final class SocketAttachedContainer implements AttachedContainer {
     /* (non-Javadoc)
      * @see java.io.Closeable#close()
      */
-    @Override
     public void close() throws IOException {
         socket.close();
     }
-
-    /* (non-Javadoc)
-     * @see com.kpelykh.docker.client.AttachedContainer#run(byte[])
+    
+    /*
+     * (non-Javadoc)
+     * @see com.kpelykh.docker.client.AttachedContainer#waitFor()
      */
-    @Override
-    public void run() throws DockerException {
-        DockerException thrown = null;
+    public void waitFor() throws InterruptedException,IOException {
         try {
-            final AttachedStreamDemuxer<?,?> demuxer = AttachedStreamDemuxer.create(in, stdout, stderr);
-            if (null != entity) {
-                out.write(entity);
-                out.flush();
-                socket.shutdownOutput();
-                logger.trace("sent request and FIN");
-            } 
-            demuxer.waitFor();
-        } catch (IOException e) {
-            throw thrown = new DockerException("error reading container output", e);
-        } catch (InterruptedException e) {
-            throw thrown = new DockerException("container output reader interrupted", e);
+            demuxer.waitFor();                    
         } finally {
-            try {
-                socket.close();
-            } catch (IOException e) {
-                if (null != thrown) {
-                    logger.error("unable to close container attach socket", e);
-                    throw thrown;
-                } else {
-                    throw new DockerException("unable to close container attach socket", e);
-                }
-            }
+            socket.close();
         }
     }
-}
+ }

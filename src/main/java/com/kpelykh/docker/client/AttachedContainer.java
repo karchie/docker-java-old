@@ -19,11 +19,12 @@
 package com.kpelykh.docker.client;
 
 import java.io.Closeable;
+import java.io.IOException;
 
 /**
  * @author Kevin A. Archie <karchie@wustl.edu>
  *
  */
 public interface AttachedContainer extends Closeable {
-    void run() throws DockerException;
+    void waitFor() throws InterruptedException,IOException;
 }

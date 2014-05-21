@@ -3,7 +3,6 @@ package com.kpelykh.docker.client.test;
 import static org.hamcrest.MatcherAssert.assertThat;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 
 import org.hamcrest.Matchers;
 import org.testng.ITestResult;
